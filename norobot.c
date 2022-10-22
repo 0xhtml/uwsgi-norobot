@@ -11,42 +11,26 @@ static char *get_var(struct wsgi_request *request, char *key, uint16_t *len) {
     return uwsgi_get_var(request, key, strlen(key), len);
 }
 
-static void get_ip(struct wsgi_request *request, unsigned char *out) {
-    uint16_t len;
-    char *ip = get_var(request, "REMOTE_ADDR", &len);
-    int j = 0;
+typedef unsigned char sha256_t[SHA256_DIGEST_LENGTH];
+#define SECRET_LEN (sizeof(uuid_t) * 2 + 1)
+#define HASH_LEN (sizeof(sha256_t) * 2 + 1)
 
-    for (int i = 0; i < 4; ++i) {
-        out[i] = 0;
-
-        while (j < len && ip[j] != '.') {
-            out[i] = (out[i] * 10) + (ip[j++] - '0');
-        }
-
-        ++j; // skip '.'
-    }
-}
-
-#define RAW_HASH_LEN SHA256_DIGEST_LENGTH
-#define HASH_LEN (RAW_HASH_LEN * 2 + 1)
-
-static void gen_hash(unsigned char *in, uint16_t in_len, unsigned char *raw_out, char *out) {
-    SHA256(in, in_len, raw_out);
-    for (uint16_t i = 0; i < RAW_HASH_LEN; ++i) {
+static void gen_hash(uuid_t in, sha256_t raw_out, char *out) {
+    SHA256(in, sizeof(uuid_t), raw_out);
+    for (uint16_t i = 0; i < sizeof(sha256_t); ++i) {
         sprintf(out + i * 2, "%02x", raw_out[i]);
     }
 }
 
-static void gen_shared_secret(struct wsgi_request *request, struct uwsgi_route *route, unsigned char *raw_out, char *out) {
-    struct {
-        uuid_t uuid;
-        unsigned char ip[4];
-    } data;
+static void gen_shared_secret(struct wsgi_request *request, struct uwsgi_route *route, uuid_t raw_out, char *out) {
+    uint16_t ip_len;
+    char *ip = get_var(request, "REMOTE_ADDR", &ip_len);
 
-    memcpy(data.uuid, route->data, sizeof(uuid_t));
-    get_ip(request, data.ip);
+    uuid_generate_sha1(raw_out, route->data, ip, ip_len);
 
-    gen_hash((unsigned char *) &data, sizeof(data), raw_out, out);
+    for (uint16_t i = 0; i < sizeof(uuid_t); ++i) {
+        sprintf(out + i * 2, "%02x", raw_out[i]);
+    }
 }
 
 static bool check_cookie(struct wsgi_request *request, char *shared_secret) {
@@ -54,7 +38,7 @@ static bool check_cookie(struct wsgi_request *request, char *shared_secret) {
     char *cookie = get_cookie(request, "secret", &cookie_len);
 
     if (cookie == NULL) return false;
-    if (cookie_len != HASH_LEN - 1) return false; // w/o terminating null-byte
+    if (cookie_len != SECRET_LEN - 1) return false; // w/o terminating null-byte
     if (memcmp(cookie, shared_secret, cookie_len)) return false;
 
     return true;
@@ -66,20 +50,20 @@ static char *content_type = "text/html; charset=utf-8";
 #define ENTER_DIGITS 3
 
 static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route *route) {
-    unsigned char raw_shared_secret[RAW_HASH_LEN];
-    char shared_secret[HASH_LEN];
+    uuid_t raw_shared_secret;
+    char shared_secret[SECRET_LEN];
     gen_shared_secret(request, route, raw_shared_secret, shared_secret);
 
     if (check_cookie(request, shared_secret)) {
         return UWSGI_ROUTE_NEXT;
     }
 
-    unsigned char raw_hash[RAW_HASH_LEN];
+    sha256_t raw_hash;
     char hash[HASH_LEN];
-    gen_hash(raw_shared_secret, sizeof(raw_shared_secret), raw_hash, hash);
+    gen_hash(raw_shared_secret, raw_hash, hash);
 
     char content[2048] = {};
-    int offset = HASH_LEN - 1 - CALC_DIGITS - ENTER_DIGITS;
+    int offset = SECRET_LEN - 1 - CALC_DIGITS - ENTER_DIGITS;
     uint16_t content_len = snprintf(
         content,
         sizeof(content),
@@ -119,7 +103,7 @@ static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route 
         "                    location.reload();\n"
         "                    return;\n"
         "                }\n"
-        "                secret.words[7]++;\n"
+        "                secret.words[3]++;\n"
         "            }\n"
         "            el.value = '';\n"
         "        }\n"
