@@ -9,6 +9,10 @@ typedef unsigned char sha256_t[SHA256_DIGEST_LENGTH];
 
 static char *status = "200 OK";
 static char *content_type = "text/html; charset=utf-8";
+static char *content;
+static unsigned long content_len;
+static unsigned long content_secret_offset;
+static unsigned long content_hash_offset;
 
 static char *get_cookie(struct wsgi_request *request, char *key, uint16_t *len) {
     return uwsgi_get_cookie(request, key, strlen(key), len);
@@ -47,9 +51,6 @@ static bool check_cookie(struct wsgi_request *request, char *shared_secret) {
     return true;
 }
 
-#define CALC_DIGITS 5
-#define ENTER_DIGITS 3
-
 static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route *route) {
     uuid_t raw_shared_secret;
     char shared_secret[SECRET_STR_LEN];
@@ -63,75 +64,22 @@ static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route 
     char hash[HASH_STR_LEN];
     gen_hash(raw_shared_secret, raw_hash, hash);
 
-    char content[2048] = {};
-    int offset = SECRET_STR_LEN - 1 - CALC_DIGITS - ENTER_DIGITS;
-    uint16_t content_len = snprintf(
-        content,
-        sizeof(content),
-        "<!DOCTYPE html>\n"
-        "<html>\n"
-        "<head>\n"
-        "    <title>Checking connection</title>\n"
-        "</head>\n"
-        "<body>\n"
-        "    <h1>Checking connection...</h1>\n"
-        "    <p>Diese Zeichen: %.*s</p>\n"
-        "    <input id='digits' type='text' placeholder='Zeichen eingeben'>\n"
-        "    <button onclick='calc()'>Verify</button>\n"
-        "    <script src='https://unpkg.com/crypto-js@4.1.1/crypto-js.js'></script>\n"
-        "    <script>\n"
-        "        function calc() {\n"
-        "            const el = document.getElementById('digits');\n"
-        "            if (el.value.length != %i) {\n"
-        "                el.value = '';\n"
-        "                return;\n"
-        "            }\n"
-        "            const secret = CryptoJS.enc.Hex.parse('%.*s' + el.value + '%0*i');\n"
-        "            const hash = CryptoJS.enc.Hex.parse('%s');\n"
-        "            for (let i = 0; i < 16 ** %i; i++) {\n"
-        "                let testHash = CryptoJS.SHA256(secret);\n"
-        "                if (\n"
-        "                    hash.words[0] == testHash.words[0] &&\n"
-        "                    hash.words[1] == testHash.words[1] &&\n"
-        "                    hash.words[2] == testHash.words[2] &&\n"
-        "                    hash.words[3] == testHash.words[3] &&\n"
-        "                    hash.words[4] == testHash.words[4] &&\n"
-        "                    hash.words[5] == testHash.words[5] &&\n"
-        "                    hash.words[6] == testHash.words[6] &&\n"
-        "                    hash.words[7] == testHash.words[7]\n"
-        "                ) {\n"
-        "                    document.cookie = 'secret=' + CryptoJS.enc.Hex.stringify(secret) + '; Max-Age=' + (60*60*24*31) + '; Secure; SameSite=Strict'\n"
-        "                    location.reload();\n"
-        "                    return;\n"
-        "                }\n"
-        "                secret.words[3]++;\n"
-        "            }\n"
-        "            el.value = '';\n"
-        "        }\n"
-        "    </script>\n"
-        "</body>\n"
-        "</html>",
-        ENTER_DIGITS, shared_secret + offset,
-        ENTER_DIGITS,
-        offset, shared_secret,
-        CALC_DIGITS, 0,
-        hash,
-        CALC_DIGITS
-    );
+    char cpy_content[content_len + 1];
+    memcpy(cpy_content, content, content_len + 1);
+    memcpy(cpy_content + content_secret_offset, shared_secret, strlen(shared_secret) - 4);
+    memcpy(cpy_content + content_hash_offset, hash, strlen(hash));
 
     if (uwsgi_response_prepare_headers(request, status, strlen(status))) {
         return UWSGI_ROUTE_BREAK;
     }
-
     if (uwsgi_response_add_content_length(request, content_len)) {
         return UWSGI_ROUTE_BREAK;
     }
-
     if (uwsgi_response_add_content_type(request, content_type, strlen(content_type))) {
         return UWSGI_ROUTE_BREAK;
     }
 
-    uwsgi_response_write_body_do(request, content, content_len);
+    uwsgi_response_write_body_do(request, cpy_content, content_len);
     return UWSGI_ROUTE_BREAK;
 }
 
@@ -154,11 +102,26 @@ static int norobot_router(struct uwsgi_route *route, char *args) {
     return 0;
 }
 
-static void register_norobot_router() {
+static void norobot_on_load() {
+    FILE *f = fopen("check.html", "r");
+
+    fseek(f, 0, SEEK_END);
+    content_len = ftell(f);
+    rewind(f);
+
+    content = uwsgi_malloc(content_len + 1);
+    fread(content, content_len, 1, f);
+    content[content_len] = '\0';
+
+    fclose(f);
+
+    content_secret_offset = strstr(content, "secret = ") - content + 33;
+    content_hash_offset = strstr(content, "hash = ") - content + 31;
+
     uwsgi_register_router("norobot", norobot_router);
 }
 
 struct uwsgi_plugin norobot_plugin = {
     .name = "norobot",
-    .on_load = register_norobot_router,
+    .on_load = norobot_on_load,
 };

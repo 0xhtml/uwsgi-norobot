@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Checking connection</title>
+</head>
+<body>
+    <h1>Checking connection...</h1>
+    <img src="https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExdXZjcDdjejJ0Z25oMHd4ZWdpNTQ4ZXVieHJjOXh2ZTdiZ2JqbWZuZSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l3nWhI38IWDofyDrW/giphy.gif" style="width:15rem" onload="r()">
+    <script src='https://unpkg.com/crypto-js@4.1.1/crypto-js.js'></script>
+    <script>
+        let secret = CryptoJS.enc.Hex.parse("00000000000000000000000000000000");
+        let hash = CryptoJS.enc.Hex.parse("0000000000000000000000000000000000000000000000000000000000000000");
+        function r() {
+            for (let i = 0; i < 10; ++i) {
+                let testHash = CryptoJS.SHA256(secret);
+                if (
+                    hash.words[0] == testHash.words[0] &&
+                    hash.words[1] == testHash.words[1] &&
+                    hash.words[2] == testHash.words[2] &&
+                    hash.words[3] == testHash.words[3] &&
+                    hash.words[4] == testHash.words[4] &&
+                    hash.words[5] == testHash.words[5] &&
+                    hash.words[6] == testHash.words[6] &&
+                    hash.words[7] == testHash.words[7]
+                ) {
+                    document.cookie = 'secret=' + CryptoJS.enc.Hex.stringify(secret) + '; Max-Age=' + (60*60*24*30) + '; Secure; SameSite=Strict'
+                    location.reload();
+                    return;
+                }
+                ++secret.words[3];
+                if ((secret.words[3] & 0xFFFF) == 0) return;
+            }
+            setTimeout(r, 0);
+        }
+    </script>
+</body>
+</html>
