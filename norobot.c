@@ -3,6 +3,13 @@
 #include <uuid/uuid.h>
 #include <uwsgi.h>
 
+typedef unsigned char sha256_t[SHA256_DIGEST_LENGTH];
+#define SECRET_STR_LEN (sizeof(uuid_t) * 2 + 1)
+#define HASH_STR_LEN (sizeof(sha256_t) * 2 + 1)
+
+static char *status = "200 OK";
+static char *content_type = "text/html; charset=utf-8";
+
 static char *get_cookie(struct wsgi_request *request, char *key, uint16_t *len) {
     return uwsgi_get_cookie(request, key, strlen(key), len);
 }
@@ -10,10 +17,6 @@ static char *get_cookie(struct wsgi_request *request, char *key, uint16_t *len) 
 static char *get_var(struct wsgi_request *request, char *key, uint16_t *len) {
     return uwsgi_get_var(request, key, strlen(key), len);
 }
-
-typedef unsigned char sha256_t[SHA256_DIGEST_LENGTH];
-#define SECRET_LEN (sizeof(uuid_t) * 2 + 1)
-#define HASH_LEN (sizeof(sha256_t) * 2 + 1)
 
 static void gen_hash(uuid_t in, sha256_t raw_out, char *out) {
     SHA256(in, sizeof(uuid_t), raw_out);
@@ -38,20 +41,18 @@ static bool check_cookie(struct wsgi_request *request, char *shared_secret) {
     char *cookie = get_cookie(request, "secret", &cookie_len);
 
     if (cookie == NULL) return false;
-    if (cookie_len != SECRET_LEN - 1) return false; // w/o terminating null-byte
+    if (cookie_len != SECRET_STR_LEN - 1) return false; // w/o terminating null-byte
     if (memcmp(cookie, shared_secret, cookie_len)) return false;
 
     return true;
 }
 
-static char *status = "200 OK";
-static char *content_type = "text/html; charset=utf-8";
 #define CALC_DIGITS 5
 #define ENTER_DIGITS 3
 
 static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route *route) {
     uuid_t raw_shared_secret;
-    char shared_secret[SECRET_LEN];
+    char shared_secret[SECRET_STR_LEN];
     gen_shared_secret(request, route, raw_shared_secret, shared_secret);
 
     if (check_cookie(request, shared_secret)) {
@@ -59,11 +60,11 @@ static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route 
     }
 
     sha256_t raw_hash;
-    char hash[HASH_LEN];
+    char hash[HASH_STR_LEN];
     gen_hash(raw_shared_secret, raw_hash, hash);
 
     char content[2048] = {};
-    int offset = SECRET_LEN - 1 - CALC_DIGITS - ENTER_DIGITS;
+    int offset = SECRET_STR_LEN - 1 - CALC_DIGITS - ENTER_DIGITS;
     uint16_t content_len = snprintf(
         content,
         sizeof(content),
@@ -136,7 +137,7 @@ static int norobot_router_func(struct wsgi_request *request, struct uwsgi_route 
 
 static int norobot_router(struct uwsgi_route *route, char *args) {
     if (strlen(args) == 0) {
-        char uuid[37];
+        char uuid[SECRET_STR_LEN];
         uwsgi_uuid(uuid);
         uwsgi_log("invalid route syntax: norobot missing uuid, replace with norobot:%s\n", uuid);
         exit(1);
